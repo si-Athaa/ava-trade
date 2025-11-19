@@ -17,9 +17,11 @@
             justify-content: center;
             align-items: center;
             min-height: 100vh;
+            padding: 20px;
         }
         .container {
             max-width: 1100px;
+            width: 100%;
         }
         .card {
             background-color: #2d3748;
@@ -124,6 +126,7 @@
             background-color: #63b3ed;
             color: white;
         }
+        .small { font-size: 12px; }
     </style>
 </head>
 <body class="p-4">
@@ -134,7 +137,7 @@
         <p class="text-gray-400">Silakan masuk dengan ID Anda atau mulai trading sekarang.</p>
 
         <div class="space-y-4">
-            <input type="number" id="idInput" placeholder="Masukkan ID 5 Angka" class="w-full p-3 rounded-md focus:ring-2 focus:ring-blue-500 text-center">
+            <input type="text" id="idInput" placeholder="Masukkan ID 5 Angka" class="w-full p-3 rounded-md focus:ring-2 focus:ring-blue-500 text-center">
             <p id="errorMsg" class="text-red-400 text-sm hidden">ID tidak valid. Silakan coba lagi.</p>
         </div>
 
@@ -233,11 +236,12 @@
             'ICBP': { name: 'Indofood CBP', history: generateSimulatedHistory(11000) },
             'PGAS': { name: 'Perusahaan Gas Negara', history: generateSimulatedHistory(1450) },
             'TLKM': { name: 'Telekomunikasi Indonesia', history: generateSimulatedHistory(4200) },
-            'GOTO': { name: 'GoTo Gojek Tokopedia', history: generateSimulatedHistory(85) },
+            'GOTO': { name: 'GoTo Gojek Tokopedia', history: generateSimulatedHistory(20000) },
             'ASII': { name: 'Astra International', history: generateSimulatedHistory(5300) },
-            'BBCA': { name: 'Bank Central Asia', history: generateSimulatedHistory(9500) },
+            'BBCA': { name: 'Bank Central BCA', history: generateSimulatedHistory(9500) },
             'UNVR': { name: 'Unilever Indonesia', history: generateSimulatedHistory(3500) },
-            'FFA': { name: 'FFA SCIENCE', history: generateSimulatedHistory(70000) }
+            // Tambahkan perusahaan baru: FFA science dengan harga awal Rp 350.000
+            'FFA': { name: 'FFA Science', history: generateSimulatedHistory(350000) },
         };
 
         const initialUserData = {
@@ -457,6 +461,9 @@
                 updateRandomStock();
                 checkActiveOrders();
             }, 3000);
+
+            // show first time popup only once per device (if logged)
+            showFirstTimePopup();
         }
 
         function updateChartButtons() {
@@ -637,6 +644,10 @@
                             ticks: {
                                 color: '#e2e8f0',
                                 callback: function(value) {
+                                    // Prevent too long numbers in chart ticks
+                                    if (Math.abs(value) >= 1000000) {
+                                        return `Rp ${ (value/1000000).toFixed(1) }M`;
+                                    }
                                     return `Rp ${value.toLocaleString('id-ID')}`;
                                 }
                             },
@@ -659,12 +670,25 @@
                             labels: {
                                 color: '#e2e8f0'
                             }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const val = context.parsed.y;
+                                    return `Rp ${val.toLocaleString('id-ID')}`;
+                                }
+                            }
                         }
                     }
                 }
             };
 
             stockChart = new Chart(chartCanvas, chartConfig);
+        }
+
+        // Clamp helper
+        function clamp(val, min, max) {
+            return Math.max(min, Math.min(max, val));
         }
 
         function updateRandomStock() {
@@ -674,17 +698,53 @@
                 const lastPrice = history[history.length - 1].c;
                 const lastCheckpoint = history[history.length - 1].x;
                 
-                // Menambahkan bias positif untuk mensimulasikan pertumbuhan rata-rata 2,5%
+                // Perbedaan volatility untuk saham murah vs mahal
+                let relativeVolatility = 0.005; // default 0.5%
+                let minPrice = 1;
+                let maxPrice = Infinity;
+
+                if (lastPrice > 100000) relativeVolatility = 0.002; // kurang volatile di harga besar
+                if (lastPrice < 500) relativeVolatility = 0.01; // lebih volatile di harga kecil
+
+                // Aturan khusus untuk GOTO
+                if (symbol === 'GOTO') {
+                    minPrice = 20000;
+                    maxPrice = 10000000;
+                }
+                
+                // Aturan khusus untuk FFA science (70k - 750k)
+                if (symbol === 'FFA') {
+                    minPrice = 70000;
+                    maxPrice = 750000;
+                    relativeVolatility = 0.008; // Sedikit lebih volatile dari saham besar
+                }
+                
+                // Menambahkan bias positif kecil (simulasi pertumbuhan)
                 const positiveBias = lastPrice * 0.00005;
-                const randomFluctuation = (Math.random() - 0.5) * lastPrice * 0.005;
+                const randomFluctuation = (Math.random() - 0.5) * lastPrice * relativeVolatility;
                 const change = positiveBias + randomFluctuation;
 
                 const newOpen = lastPrice;
-                const newClose = Math.round(lastPrice + change);
-                const newHigh = Math.max(newOpen, newClose, Math.round(newClose + (Math.random() * 0.01 * lastPrice)));
-                const newLow = Math.min(newOpen, newClose, Math.round(newClose - (Math.random() * 0.01 * lastPrice)));
+                let newClose = Math.round(lastPrice + change);
 
-                history.push({ x: lastCheckpoint + 1, o: newOpen, h: newHigh, l: newLow > 0 ? newLow : 1, c: newClose > 0 ? newClose : 1 });
+                // Terapkan clamp ke harga penutupan
+                newClose = clamp(newClose, minPrice, maxPrice);
+
+                // Hitung high/low wajar di sekitar open/close
+                const highCandidate = Math.max(newOpen, newClose) + Math.round(Math.random() * lastPrice * 0.01);
+                const lowCandidate = Math.min(newOpen, newClose) - Math.round(Math.random() * lastPrice * 0.01);
+
+                let newHigh = Math.max(newOpen, newClose, highCandidate);
+                let newLow = Math.min(newOpen, newClose, lowCandidate);
+
+                // Terapkan clamp ke high/low
+                newHigh = clamp(newHigh, minPrice, maxPrice);
+                newLow = clamp(newLow, minPrice, maxPrice);
+
+                history.push({ x: lastCheckpoint + 1, o: newOpen, h: newHigh, l: newLow, c: newClose });
+                
+                // keep history length reasonable
+                if (history.length > 500) history.shift();
             }
             
             // Perbarui data grafik hanya untuk saham yang sedang dipilih
@@ -720,6 +780,11 @@
             const takeProfitPrice = parseFloat(takeProfitInput.value) || null;
             const currentPrice = stocks[selectedSymbol].history[stocks[selectedSymbol].history.length - 1].c;
             const cost = quantity * currentPrice;
+
+            if (isNaN(quantity) || quantity <= 0) {
+                Swal.fire({ icon: 'error', title: 'Gagal!', text: 'Jumlah saham tidak valid.' });
+                return;
+            }
 
             if (user.cash >= cost) {
                 user.cash -= cost;
@@ -902,6 +967,37 @@
                     });
                 }
             });
+        }
+
+        // FIRST TIME POPUP (muncul sekali)
+        function showFirstTimePopup() {
+            const hasSeenPopup = localStorage.getItem('ava_first_popup_shown');
+
+            if (!hasSeenPopup) {
+                Swal.fire({
+                    title: 'Selamat Datang di AVA Trade!',
+                    html: `
+                        <div style="text-align:left; line-height:1.6; font-size:15px;">
+                            <b style="color:#63b3ed">Peringatan Cepat:</b><br>
+                            • Ini hanya simulator, bukan trading asli<br>
+                            • Harga bergerak otomatis sebagai simulasi<br>
+                            • Gunakan <b>Stop Loss</b> untuk batas rugi<br>
+                            • Gunakan <b>Take Profit</b> untuk target cuan<br>
+                            • Belajar dulu, jangan FOMO 😎<br><br>
+                            <i style="color:#a0aec0">Semoga simulasi ini bikin lo makin jago trading ✨</i>
+                        </div>
+                    `,
+                    icon: 'info',
+                    confirmButtonText: 'Gaskeun 😎',
+                    confirmButtonColor: '#3b82f6',
+                    background: '#1e293b',
+                    color: '#e2e8f0',
+                    width: '420px',
+                    backdrop: `rgba(0,0,0,0.7)`
+                });
+
+                localStorage.setItem('ava_first_popup_shown', 'true');
+            }
         }
 
         document.addEventListener('DOMContentLoaded', () => {
